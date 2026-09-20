@@ -1,22 +1,31 @@
-import { reconcileAll, type Rule } from "./core.js";
+import type { Rule } from "./core.js";
+import { schedule } from "./scheduler.js";
+import { load, save } from "./store.js";
 
-const store = new Map<string, string>([
-  ["issue-1", "open"],
-  ["issue-2", "closed"],
-]);
+const STATE_FILE = ".automata/issues.json";
+const INTERVAL_MS = 5000;
 
-const mirrorStatus: Rule<Record<string, string>> = {
+type Issues = Record<string, string>;
+
+const seed: Issues = { "issue-1": "open", "issue-2": "closed" };
+
+const mirrorStatus: Rule<Issues> = {
   name: "mirror-status",
-  observe: async () => Object.fromEntries(store),
+  observe: () => load(STATE_FILE, seed),
   desired: (state) =>
     Object.fromEntries(Object.entries(state).map(([k, v]) => [k, v === "closed" ? "done" : v])),
-  apply: async (_from, to) => {
-    for (const [k, v] of Object.entries(to)) store.set(k, v);
-  },
+  apply: (_from, to) => save(STATE_FILE, to),
 };
 
-const results = await reconcileAll([mirrorStatus]);
-for (const r of results) {
-  console.log(`${r.rule}: ${r.error ? `error - ${r.error.message}` : r.changed ? "converged" : "no drift"}`);
-}
-console.log(Object.fromEntries(store));
+const stop = schedule([mirrorStatus], INTERVAL_MS, (results) => {
+  const at = new Date().toISOString().slice(11, 19);
+  for (const r of results) {
+    const outcome = r.error ? `error - ${r.error.message}` : r.changed ? "converged" : "no drift";
+    console.log(`${at} ${r.rule}: ${outcome}`);
+  }
+});
+
+process.on("SIGINT", () => {
+  stop();
+  process.exit(0);
+});
